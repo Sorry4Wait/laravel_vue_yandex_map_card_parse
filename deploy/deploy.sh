@@ -74,6 +74,12 @@ if [ "$migrate_ok" -ne 1 ]; then
   exit 1
 fi
 
+echo "==> Seeding demo user"
+# DatabaseSeeder uses updateOrCreate on the one demo login — safe to run on
+# every deploy, never duplicates. The assignment has no registration flow,
+# so without this a fresh database has zero users and nobody can log in.
+docker compose -f docker-compose.prod.yml exec -T app php artisan db:seed --force
+
 echo "==> Caching config/routes"
 docker compose -f docker-compose.prod.yml exec -T app php artisan config:cache
 docker compose -f docker-compose.prod.yml exec -T app php artisan route:cache
