@@ -18,8 +18,14 @@ echo "==> Waiting for MySQL to accept connections"
 set -a; source .env; set +a
 mysql_ready=0
 for _ in $(seq 1 60); do
+  # -h127.0.0.1 forces a real TCP probe, matching what the app container's
+  # mysql:3306 connection actually needs. "-h localhost" resolves to a unix
+  # socket instead, which stays open on the *temporary* bootstrap server the
+  # mysql image runs during first-time init — well before the real
+  # TCP-listening server comes up — so it gives a false "ready" positive and
+  # migrate below still hits "Connection refused" moments later.
   if docker compose -f docker-compose.prod.yml exec -T mysql \
-      mysqladmin ping -h localhost -uroot -p"${MYSQL_ROOT_PASSWORD}" --silent 2>/dev/null; then
+      mysqladmin ping -h127.0.0.1 -uroot -p"${MYSQL_ROOT_PASSWORD}" --silent 2>/dev/null; then
     mysql_ready=1
     break
   fi
@@ -55,7 +61,18 @@ if ! grep -q '^APP_KEY=base64' backend/.env; then
 fi
 
 echo "==> Running migrations"
-docker compose -f docker-compose.prod.yml exec -T app php artisan migrate --force
+migrate_ok=0
+for _ in $(seq 1 10); do
+  if docker compose -f docker-compose.prod.yml exec -T app php artisan migrate --force; then
+    migrate_ok=1
+    break
+  fi
+  sleep 3
+done
+if [ "$migrate_ok" -ne 1 ]; then
+  echo "Migrations failed after retries" >&2
+  exit 1
+fi
 
 echo "==> Caching config/routes"
 docker compose -f docker-compose.prod.yml exec -T app php artisan config:cache
